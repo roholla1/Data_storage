@@ -1,0 +1,92 @@
+-- Query 1: Materialized View
+CREATE MATERIALIZED VIEW lesson_counts_per_month AS
+SELECT 
+    to_char(date_trunc('month', lesson_time), 'Mon') AS "Month",
+    COUNT(*) AS "Total",
+    SUM(CASE WHEN lesson_type = 'individual_lesson' THEN 1 ELSE 0 END) AS "Individual",
+    SUM(CASE WHEN lesson_type = 'group_lesson' THEN 1 ELSE 0 END) AS "Group",
+    SUM(CASE WHEN lesson_type = 'ensemble' THEN 1 ELSE 0 END) AS "Ensemble"
+FROM (
+    SELECT 
+        appointment_time AS lesson_time,
+        'individual_lesson' AS lesson_type
+    FROM individual_lesson
+    UNION ALL
+    SELECT 
+        schedule_time_slot AS lesson_time,
+        'group_lesson' AS lesson_type
+    FROM group_lesson
+    UNION ALL
+    SELECT 
+        schedule_time_slot AS lesson_time,
+        'ensemble' AS lesson_type
+    FROM ensemble
+) AS combined_lessons
+WHERE EXTRACT(YEAR FROM lesson_time) = 2024
+GROUP BY date_trunc('month', lesson_time);
+
+-- Query 2: Materialized View
+CREATE MATERIALIZED VIEW student_sibling_counts AS
+SELECT 
+    sibling_count AS "No of siblings", 
+    COUNT(*) AS "No of students"
+FROM (
+    SELECT 
+        student.id AS student_id,
+        COUNT(sibling.sibling_id) AS sibling_count
+    FROM student
+    LEFT JOIN student_sibling sibling ON student.id = sibling.student_id
+    GROUP BY student.id
+) AS sibling_data
+GROUP BY sibling_count
+ORDER BY sibling_count;
+
+-- Query 3: View
+CREATE VIEW instructor_lesson_counts AS
+SELECT
+    instructor.id AS "Instructor id",
+    instructor.first_name AS "First name",
+    instructor.last_name AS "Last name",
+    COUNT(*) AS "No of lessons"
+FROM
+    instructor
+JOIN (
+    SELECT instructor_id, appointment_time AS lesson_time
+    FROM individual_lesson
+    UNION ALL
+    SELECT instructor_id, schedule_time_slot AS lesson_time
+    FROM group_lesson
+    UNION ALL
+    SELECT instructor_id, schedule_time_slot AS lesson_time
+    FROM ensemble
+) lessons ON instructor.id = lessons.instructor_id
+WHERE
+    lessons.lesson_time >= DATE_TRUNC('month', CURRENT_DATE) 
+    AND lessons.lesson_time <= CURRENT_DATE
+GROUP BY
+    instructor.id
+ORDER BY
+    "No of lessons" DESC;
+
+-- Query 4: View
+CREATE VIEW ensemble_availability_next_week AS
+SELECT
+    to_char(ensemble.schedule_time_slot, 'FMDay') AS "Day",
+    ensemble.target_genre AS "Genre",
+    CASE
+        WHEN (ensemble.max_capacity - COUNT(se.student_id)) = 0 THEN 'No seats'
+        WHEN (ensemble.max_capacity - COUNT(se.student_id)) BETWEEN 1 AND 2 THEN '1 or 2 Seats'
+    ELSE 'Many Seats'
+    END AS "No of Free Seats"
+FROM
+    ensemble
+LEFT JOIN student_ensemble se ON ensemble.id = se.ensemble_id
+WHERE
+    ensemble.schedule_time_slot::date BETWEEN
+        (date_trunc('week', CURRENT_DATE) + INTERVAL '1 week')::date AND
+        (date_trunc('week', CURRENT_DATE) + INTERVAL '2 week' - INTERVAL '1 day')::date
+GROUP BY
+    ensemble.id
+ORDER BY
+    EXTRACT(ISODOW FROM ensemble.schedule_time_slot),
+    "Genre";
